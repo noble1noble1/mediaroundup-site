@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>MediaRoundup</title>
+<style>
+  body { margin:0; background:#e9eef2; font:15px/1.5 Georgia, 'Times New Roman', serif; color:#142033; }
+  .shell { max-width:680px; margin:48px auto; padding:0 16px; }
+  .card { background:#fff; border:1px solid #dce2e8; padding:38px 42px; }
+  h1 { margin:0 0 4px; font:700 30px/1 Arial, Helvetica, sans-serif; letter-spacing:-1px; }
+  .dek { color:#607087; font:13px/1.4 Arial, Helvetica, sans-serif; margin:0 0 26px; }
+  input[type=password] { font:16px Georgia, serif; padding:10px 12px; border:1px solid #c9d4d9; width:220px; }
+  button { font:600 14px Arial, Helvetica, sans-serif; color:#fff; background:#0b5d6b; border:0; padding:11px 20px; cursor:pointer; margin-left:8px; }
+  .err { color:#a33; font:13px Arial, Helvetica, sans-serif; margin-top:10px; display:none; }
+  .dates a { display:block; padding:13px 2px; border-bottom:1px solid #eef1f4; color:#0b5d6b; font:600 16px Arial, Helvetica, sans-serif; text-decoration:none; }
+  .dates a:hover { background:#f4f7f9; }
+  .back { display:inline-block; margin:0 0 14px; color:#0b5d6b; font:600 13px Arial, Helvetica, sans-serif; text-decoration:none; cursor:pointer; }
+  #report { background:transparent; }
+  #report .card-wrap { padding:0; }
+</style>
+</head>
+<body>
+<div class="shell" id="gate">
+  <div class="card">
+    <h1>MediaRoundup</h1>
+    <p class="dek">Daily media intelligence for Sixpoint. Private review site.</p>
+    <form id="pwform">
+      <input type="password" id="pw" placeholder="Password" autofocus autocomplete="current-password">
+      <button type="submit">Open</button>
+    </form>
+    <div class="err" id="err">That password did not work.</div>
+  </div>
+</div>
+<div class="shell" id="list" style="display:none">
+  <div class="card">
+    <h1>MediaRoundup</h1>
+    <p class="dek">Choose an edition.</p>
+    <div class="dates" id="dates"></div>
+  </div>
+</div>
+<div class="shell" id="report" style="display:none">
+  <a class="back" id="back">&larr; All editions</a>
+  <div class="card-wrap" id="reporthost"></div>
+</div>
+<script>
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+let PW = null, MANIFEST = null;
+
+async function deriveKey(pw, salt, iter) {
+  const mat = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:iter, hash:'SHA-256'}, mat,
+    {name:'AES-GCM', length:256}, false, ['decrypt']);
+}
+async function decrypt(pw, blob) {
+  const key = await deriveKey(pw, b64(blob.salt), blob.iter);
+  const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv:b64(blob.iv)}, key, b64(blob.ct));
+  return new TextDecoder().decode(pt);
+}
+async function fetchJson(path) { const r = await fetch(path, {cache:'no-store'}); return r.json(); }
+
+async function unlock(pw) {
+  const blob = await fetchJson('manifest.enc.json');
+  MANIFEST = JSON.parse(await decrypt(pw, blob));  // throws on bad password
+  PW = pw;
+  try { sessionStorage.setItem('mrpw', pw); } catch (e) {}
+  showList();
+}
+function showList() {
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('report').style.display = 'none';
+  document.getElementById('list').style.display = '';
+  const host = document.getElementById('dates');
+  host.innerHTML = '';
+  for (const entry of MANIFEST.dates) {
+    const a = document.createElement('a');
+    a.textContent = entry.label;
+    a.href = '#' + entry.date;
+    a.onclick = e => { e.preventDefault(); openDate(entry.date); };
+    host.appendChild(a);
+  }
+}
+async function openDate(date) {
+  const blob = await fetchJson('reports/' + date + '.enc.json');
+  const html = await decrypt(PW, blob);
+  document.getElementById('list').style.display = 'none';
+  const rep = document.getElementById('report');
+  rep.style.display = '';
+  const holder = document.getElementById('reporthost');
+  holder.innerHTML = html;
+  window.scrollTo(0, 0);
+  history.replaceState(null, '', '#' + date);
+}
+document.getElementById('back').onclick = () => { history.replaceState(null, '', '#'); showList(); };
+document.getElementById('pwform').onsubmit = async e => {
+  e.preventDefault();
+  const pw = document.getElementById('pw').value;
+  try { await unlock(pw); }
+  catch (err) { document.getElementById('err').style.display = 'block'; }
+};
+(async () => {
+  let saved = null;
+  try { saved = sessionStorage.getItem('mrpw'); } catch (e) {}
+  if (saved) {
+    try {
+      await unlock(saved);
+      const want = location.hash.replace('#','');
+      if (want && MANIFEST.dates.some(d => d.date === want)) openDate(want);
+    } catch (e) {}
+  }
+})();
+</script>
+</body>
+</html>
